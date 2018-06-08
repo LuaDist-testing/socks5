@@ -1,3 +1,5 @@
+local ngx = require('ngx')
+
 local socks5 = {}
 
 local char = string.char
@@ -23,6 +25,8 @@ local CONN_ERRORS = {
     [0x07] = 'command not supported / protocol error',
     [0x08] = 'address type not supported',
 }
+
+local CHUNK_SIZE = 1024
 
 -- authentication to socks5 server
 socks5.auth = function(cosocket)
@@ -67,23 +71,27 @@ socks5.connect = function(cosocket, host, port)
 end
 
 socks5.handle_request = function(socks5host, socks5port,
-        request_changer, response_changer)
+        request_changer, response_changer, change_only_html)
     local sosocket = ngx.socket.connect(socks5host, socks5port)
-    local status, message = socks5.auth(sosocket)
-    if not status then
-        ngx.say('Error: ' .. message)
-        return
+    do
+        local status, message = socks5.auth(sosocket)
+        if not status then
+            ngx.say('Error: ' .. message)
+            return
+        end
     end
     local target_host = ngx.req.get_headers()['Host']
     if request_changer then
         target_host = request_changer(target_host)
     end
     local target_port = 80
-    local status, message = socks5.connect(sosocket,
-        target_host, target_port)
-    if not status then
-        ngx.say('Error: ' .. message)
-        return
+    do
+        local status, message = socks5.connect(sosocket,
+            target_host, target_port)
+        if not status then
+            ngx.say('Error: ' .. message)
+            return
+        end
     end
     -- read request
     local clheader = ngx.req.raw_header()
@@ -108,56 +116,39 @@ socks5.handle_request = function(socks5host, socks5port,
     end
     local sobody_length = soheader:match(
         'Content%-Length%: (%d+)')
-    if response_changer then
-        soheader = response_changer(soheader)
-    end
+    local is_html = soheader:match('Content%-Type: text/html')
+    local change = is_html or not change_only_html
     local clsocket = ngx.req.socket(true)
-    local sobody = sosocket:receive(sobody_length or '*a') or ''
-    if response_changer then
+    if response_changer and change then
+        -- read whole body
+        local sobody = sosocket:receive(sobody_length or '*a') or ''
         sobody = response_changer(sobody)
-    end
-    if soheader:find('Content%-Length%:') then
-        soheader = soheader:gsub('Content%-Length%: %d+',
-            'Content-Length: ' .. #sobody)
+        soheader = response_changer(soheader)
+        if soheader:find('Content%-Length%:') then
+            soheader = soheader:gsub('Content%-Length%: %d+',
+                'Content-Length: ' .. #sobody)
+        else
+            soheader = soheader ..
+                '\r\nContent-Length: ' .. #sobody
+        end
+        clsocket:send(soheader .. '\r\n\r\n' .. sobody)
     else
-        soheader = soheader ..
-            '\r\nContent-Length: ' .. #sobody
+        -- stream
+        clsocket:send(soheader .. '\r\n\r\n')
+        while true do
+            local sobody, _, partial = sosocket:receive(CHUNK_SIZE)
+            if not sobody then
+                clsocket:send(partial)
+                break
+            end
+            local bytes = clsocket:send(sobody)
+            if not bytes then
+                break
+            end
+        end
     end
-    clsocket:send(soheader .. '\r\n\r\n')
-    clsocket:send(sobody)
     -- close
     sosocket:close()
-end
-
-local hidden_base = "(" .. string.rep("%w", 16) .. ")"
-local hidden_onion = hidden_base .. '%.onion'
-
-socks5.handle_onion2web = function(onion_replacement,
-        torhost, torport)
-    if not torhost then
-        torhost = '127.0.0.1'
-    end
-    if not torport then
-        torport = 9050
-    end
-    local repl = hidden_base .. onion_replacement
-    local host = ngx.req.get_headers()['Host']
-    if not host:match('^' .. repl .. '$') then
-        ngx.say('Bad domain: ' .. host)
-        return
-    end
-    socks5.handle_request(torhost, torport,
-    function(clheader)
-        return clheader
-        :gsub("HTTP/1.1(%c+)", "HTTP/1.0%1")
-        :gsub(repl, "%1.onion")
-        :gsub("Connection: keep%-alive", "Connection: close")
-        :gsub("Accept%-Encoding: [%w%p ]+%c+", "")
-    end,
-    function(soheader)
-        return soheader
-        :gsub(hidden_onion, "%1" .. onion_replacement)
-    end)
 end
 
 return socks5
