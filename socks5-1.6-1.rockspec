@@ -1,16 +1,16 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "socks5"
-version = "1.5-1"
+version = "1.6-1"
 -- LuaDist source
 source = {
-  tag = "1.5-1",
+  tag = "1.6-1",
   url = "git://github.com/LuaDist-testing/socks5.git"
 }
 -- Original source
 -- source = {
 --     url = 'git://github.com/starius/lua-resty-socks5',
---     tag = 'master',
+--     tag = '1.6',
 -- }
 description = {
     summary =

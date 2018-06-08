@@ -136,9 +136,8 @@ socks5.handle_request = function(socks5host, socks5port,
         -- stream
         clsocket:send(soheader .. '\r\n\r\n')
         while true do
-            local sobody, _, partial = sosocket:receive(CHUNK_SIZE)
+            local sobody = sosocket:receive(CHUNK_SIZE)
             if not sobody then
-                clsocket:send(partial)
                 break
             end
             local bytes = clsocket:send(sobody)
